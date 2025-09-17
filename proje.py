@@ -1,45 +1,61 @@
 import cv2
 import pytesseract
-from fuzzywuzzy import fuzz
+from pytesseract import Output
+from rapidfuzz import fuzz
+import re
 
-# Tesseract yolu (Windows için)
+
 pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+IMAGE_PATH = r"C:\Users\rusen\Desktop\7c36522c-5cd9-46cd-bc2f-4322b82cd22c.jpg"
 
-# Görseli oku
-img = cv2.imread("C:\\Users\\rusen\\Desktop\\7c36522c-5cd9-46cd-bc2f-4322b82cd22c.jpg")
 
-# Griye çevir ve threshold uygula
+img = cv2.imread(IMAGE_PATH)
+if img is None:
+    raise FileNotFoundError(f"Resim bulunamadı: {IMAGE_PATH}")
+
+scale = 1.4
+img = cv2.resize(img, (int(img.shape[1]*scale), int(img.shape[0]*scale)), interpolation=cv2.INTER_LINEAR)
+
+# Ön işlem
 gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-_, thresh = cv2.threshold(gray, 180, 255, cv2.THRESH_BINARY)
+gray = cv2.bilateralFilter(gray, 9, 75, 75)
+thresh = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                               cv2.THRESH_BINARY, 15, 8)
+kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (2,2))
+thresh = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel)
 
-# OCR işlemi
-metin = pytesseract.image_to_string(thresh, lang="tur+eng").upper()
+data = pytesseract.image_to_data(thresh, lang="tur+eng", config="--psm 6", output_type=Output.DICT)
 
-# Tüm kelimeleri ayır
-kelimeler = metin.split()
+lines = {}
+for i in range(len(data['text'])):
+    t = data['text'][i].strip()
+    if t == "":
+        continue
+    key = (data['block_num'][i], data['line_num'][i])
+    lines.setdefault(key, []).append(t)
 
-# Tür filtreleri
-kucukbas_turleri = ["KOYUN", "KEÇİ"]
-buyukbas_turleri = ["SIĞIR", "İNEK", "MANDA", "DANA"]
+line_texts = [" ".join(lines[k]) for k in sorted(lines.keys())]
 
-# Sayaçlar
-kucukbas_sayisi = 0
-buyukbas_sayisi = 0
 
-# Kelime bazlı fuzzy eşleşme
-for kelime in kelimeler:
-    for tur in kucukbas_turleri:
-        if fuzz.ratio(kelime, tur) > 70:  # %70 benzerlik
-            kucukbas_sayisi += 1
-            break
-    for tur in buyukbas_turleri:
-        if fuzz.ratio(kelime, tur) > 70:
-            buyukbas_sayisi += 1
-            break
+koyun_lines = [lt for lt in line_texts if fuzz.partial_ratio(lt.upper(), "KOYUN") >= 75]
 
-# Sonuçları yaz
-print("📜 OCR Çıktısı (ilk 500 karakter):")
-print(metin[:500])  # debug için ilk kısmını göster
 
-print(f"✅ Küçükbaş hayvan sayısı: {kucukbas_sayisi}")
-print(f"✅ Büyükbaş hayvan sayısı: {buyukbas_sayisi}")
+def is_header_line(s):
+    u = s.upper()
+    keywords = ["İŞLETME", "ISLETME", "HAYVAN", "RAPORU", "KOYUN KEG", "KOYUN KEGI"]
+    return any(k in u for k in keywords)
+
+
+filtered = koyun_lines.copy()
+if len(koyun_lines) > 0 and is_header_line(koyun_lines[0]):
+    filtered = koyun_lines[1:]
+
+
+final_count = len(filtered)
+
+
+print("----- Bulunan 'KOYUN' satırları (başlık çıkarıldı) -----")
+for s in filtered[:40]:
+    print("-", s)
+
+print("\n***** SONUÇ: Bu görsel için bulunan koyun sayısı (satır bazlı):", final_count, "*****")
